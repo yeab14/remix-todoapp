@@ -1,14 +1,16 @@
+import React, { useEffect, useState } from 'react';
 import { PrismaClient } from '@prisma/client';
 import { json, redirect } from '@remix-run/node';
 import { Form, useLoaderData } from '@remix-run/react';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import { DndProvider, useDrag, useDrop } from 'react-dnd';
+import { HTML5Backend } from 'react-dnd-html5-backend';
 
 const prisma = new PrismaClient();
 
 // Loader function to fetch ToDos
 export const loader = async () => {
   const todos = await prisma.todo.findMany({
-    orderBy: { order: 'asc' } 
+    orderBy: { order: 'asc' }
   });
   return json({ todos });
 };
@@ -59,17 +61,113 @@ export const action = async ({ request }: { request: Request }) => {
   return redirect('/todos');
 };
 
-// Component to render the ToDo list
+// Define types for props
+interface DraggableItemProps {
+  id: number;
+  index: number;
+  title: string;
+  completed: boolean;
+  onComplete: () => void;
+  onDelete: () => void;
+}
+
+const DraggableItem: React.FC<DraggableItemProps> = ({
+  id,
+  index,
+  title,
+  completed,
+  onComplete,
+  onDelete
+}) => {
+  const [, ref] = useDrag({
+    type: 'TODO',
+    item: { id, index },
+  });
+
+  return (
+    <li
+      ref={ref}
+      className="flex justify-between items-center bg-white border rounded p-2"
+    >
+      <span className={completed ? 'line-through text-gray-500' : ''}>
+        {title}
+      </span>
+      <div className="flex gap-2">
+        <Form method="post">
+          <input type="hidden" name="id" value={id} />
+          <input type="hidden" name="intent" value="complete" />
+          <input type="hidden" name="completed" value={!completed ? 'true' : 'false'} />
+          <button type="submit" className={`px-2 py-1 rounded ${completed ? 'bg-gray-500' : 'bg-green-500'} text-white`}>
+            {completed ? 'Undo' : 'Complete'}
+          </button>
+        </Form>
+        <Form method="post">
+          <input type="hidden" name="id" value={id} />
+          <input type="hidden" name="intent" value="delete" />
+          <button type="submit" className="bg-red-500 text-white px-2 py-1 rounded">
+            Delete
+          </button>
+        </Form>
+      </div>
+    </li>
+  );
+};
+
+// Define types for props
+interface DroppableAreaProps {
+  todos: { id: number; title: string; completed: boolean; order: number }[];
+  onDrop: (fromIndex: number, toIndex: number) => void;
+}
+
+const DroppableArea: React.FC<DroppableAreaProps> = ({ todos, onDrop }) => {
+  const [, ref] = useDrop({
+    accept: 'TODO',
+    drop: (item: { id: number; index: number }) => {
+      onDrop(item.index, todos.length - 1);
+    },
+  });
+
+  return (
+    <ul ref={ref} className="space-y-4">
+      {todos.length > 0 ? (
+        todos.map((todo, index) => (
+          <DraggableItem
+            key={todo.id}
+            id={todo.id}
+            index={index}
+            title={todo.title}
+            completed={todo.completed}
+            onComplete={() => {}}
+            onDelete={() => {}}
+          />
+        ))
+      ) : (
+        <p>No todos found.</p>
+      )}
+    </ul>
+  );
+};
+
+// Define type for the todo state
+interface Todo {
+  id: number;
+  title: string;
+  completed: boolean;
+  order: number;
+}
+
 export default function TodoList() {
-  const { todos } = useLoaderData<{ todos: { id: number; title: string; completed: boolean; order: number }[] }>();
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const { todos: initialTodos } = useLoaderData<{ todos: Todo[] }>();
 
-  // Handle drag-and-drop event
-  const onDragEnd = async (result: any) => {
-    if (!result.destination) return;
+  useEffect(() => {
+    setTodos(initialTodos);
+  }, [initialTodos]);
 
+  const moveTodo = async (fromIndex: number, toIndex: number) => {
     const reorderedTodos = Array.from(todos);
-    const [movedTodo] = reorderedTodos.splice(result.source.index, 1);
-    reorderedTodos.splice(result.destination.index, 0, movedTodo);
+    const [movedTodo] = reorderedTodos.splice(fromIndex, 1);
+    reorderedTodos.splice(toIndex, 0, movedTodo);
 
     // Update the order in the database
     for (let i = 0; i < reorderedTodos.length; i++) {
@@ -83,79 +181,36 @@ export default function TodoList() {
         }),
       });
     }
+
+    setTodos(reorderedTodos);
   };
 
   return (
-    <div className="max-w-lg mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Todo List</h1>
+    <DndProvider backend={HTML5Backend}>
+      <div className="max-w-lg mx-auto p-4">
+        <h1 className="text-2xl font-bold mb-4">Todo List</h1>
 
-      <Form method="post" className="flex gap-2 mb-6">
-        <input
-          name="title"
-          type="text"
-          placeholder="Add a new todo"
-          className="p-2 border rounded w-full"
-          required
-        />
-        <button type="submit" className="bg-blue-500 text-white px-4 py-2 rounded">
-          Add
-        </button>
-      </Form>
+        <Form method="post" className="flex gap-2 mb-6">
+          <input
+            name="title"
+            type="text"
+            placeholder="Add a new todo"
+            className="p-2 border rounded w-full"
+            required
+          />
+          <button type="submit" className="bg-blue-500 text-white px-4 py-2 rounded">
+            Add
+          </button>
+        </Form>
 
-      <DragDropContext onDragEnd={onDragEnd}>
-        <Droppable droppableId="droppable">
-          {(provided) => (
-            <ul
-              className="space-y-4"
-              ref={provided.innerRef}
-              {...provided.droppableProps}
-            >
-              {todos.length > 0 ? (
-                todos.map((todo, index) => (
-                  <Draggable key={todo.id} draggableId={todo.id.toString()} index={index}>
-                    {(provided) => (
-                      <li
-                        ref={provided.innerRef}
-                        {...provided.draggableProps}
-                        {...provided.dragHandleProps}
-                        className="flex justify-between items-center bg-white border rounded p-2"
-                      >
-                        <span className={todo.completed ? 'line-through text-gray-500' : ''}>
-                          {todo.title}
-                        </span>
-                        <div className="flex gap-2">
-                          <Form method="post">
-                            <input type="hidden" name="id" value={todo.id} />
-                            <input type="hidden" name="intent" value="complete" />
-                            <input type="hidden" name="completed" value={!todo.completed} />
-                            <button type="submit" className={`px-2 py-1 rounded ${todo.completed ? 'bg-gray-500' : 'bg-green-500'} text-white`}>
-                              {todo.completed ? 'Undo' : 'Complete'}
-                            </button>
-                          </Form>
-
-                          <Form method="post">
-                            <input type="hidden" name="id" value={todo.id} />
-                            <input type="hidden" name="intent" value="delete" />
-                            <button type="submit" className="bg-red-500 text-white px-2 py-1 rounded">
-                              Delete
-                            </button>
-                          </Form>
-                        </div>
-                      </li>
-                    )}
-                  </Draggable>
-                ))
-              ) : (
-                <p>No todos found.</p>
-              )}
-              {provided.placeholder}
-            </ul>
-          )}
-        </Droppable>
-      </DragDropContext>
-    </div>
+        <DroppableArea todos={todos} onDrop={(fromIndex, toIndex) => moveTodo(fromIndex, toIndex)} />
+      </div>
+    </DndProvider>
   );
 }
+
+
+
 
 
 
